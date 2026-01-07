@@ -1,11 +1,11 @@
 {
     "dockerfile_lines": [],
     "graphs": {
-        "agent": "./src1/cownet_multi_agent/workflow.py:graph"
+        "agent": "./src/agents/workflow.py:graph"
     },
     "env": ".env",
     "python_version": "3.11",
-    "dependencies": ["-r", "requirements.txt"],
+    "dependencies": ["."],
     "store": {
         "index": {
             "dims": 1536,

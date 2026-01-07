@@ -1,25 +1,15 @@
 agents:
-  hypothesis_agent:
+  supervisor_agent:
     provider: openai
     model_config:
       model: gpt-5-mini
       temperature: 0.0
-  process_agent:
+  sna_agent:
     provider: openai
     model_config:
       model: gpt-5-mini
       temperature: 0.0
-  visualization_agent:
-    provider: openai
-    model_config:
-      model: gpt-5-mini
-      temperature: 0.0
-  code_agent:
-    provider: openai
-    model_config:
-      model: gpt-5-mini
-      temperature: 0.0
-  searcher_agent:
+  data_loader_agent:
     provider: openai
     model_config:
       model: gpt-5-mini
@@ -29,17 +19,17 @@ agents:
     model_config:
       model: gpt-5-mini
       temperature: 0.0
-  quality_review_agent:
+  research_agent:
     provider: openai
     model_config:
       model: gpt-5-mini
       temperature: 0.0
-  note_agent:
+  simulation_agent:
     provider: openai
     model_config:
       model: gpt-5-mini
       temperature: 0.0
-  refiner_agent:
+  response_agent:
     provider: openai
     model_config:
       model: gpt-5-mini
