@@ -189,7 +189,7 @@ python batch_runner.py
 
 - **Dr. Suresh Neethirajan** — Principal Investigator
 - **Tahseen Shanteer** — Research Intern
-- **Kashfia Sailunaz** — Daily Supervisor
+- **Dr. Kashfia Sailunaz** — Daily Supervisor
 
 **MooAnalytica Research Group**, Dalhousie University
 
