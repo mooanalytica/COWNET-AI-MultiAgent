@@ -121,6 +121,8 @@ python main.py
 
 Start the server with `uvicorn src.api.api:app --reload`
 
+### Chat Endpoints
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Health check |
@@ -128,15 +130,42 @@ Start the server with `uvicorn src.api.api:app --reload`
 | `POST` | `/threads/new` | Create new conversation thread |
 | `GET` | `/threads/{id}/history` | Get conversation history |
 
+### File Upload Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/upload` | Upload and validate a CSV data file |
+| `GET` | `/upload/types` | Get supported file types and schemas |
+| `DELETE` | `/upload/temp/{file_id}` | Delete a temporary file |
+
+#### Supported File Types
+
+| File Type | Required Columns |
+|-----------|------------------|
+| `cow_location` | `cow_id` (uuid/int), `timestamp` (UNIX), `x_coor` (float), `y_coor` (float), `z_coor` (float) |
+| `cow_registry` | `cow_id` (uuid/int), `parity` (int), `lactation_stage` (string), `week_id` (ISO-8601) |
+| `pen_assignment` | `cow_id` (uuid/int), `pen_id` (int), `week_id` (ISO-8601) |
+
 Interactive docs available at `http://localhost:8000/docs`
 
 ---
 
 ## 📊 Data Format
 
+### Interaction Data (SNA Input)
 **Input**: CSV with columns `cow_i`, `cow_j`, `start_ts`, `end_ts`
 
 **Output**: Herd-level metrics (density, clustering) and per-cow metrics (centrality, isolation risk)
+
+### Uploaded Data Files
+
+Files uploaded via the API are validated and stored in `src/data/`. Supported formats:
+
+- **Cow Location**: Spatial tracking data with coordinates and timestamps
+- **Cow Registry**: Cow metadata including parity and lactation stage
+- **Pen Assignment**: Weekly pen assignments for each cow
+
+See `/upload/types` endpoint for detailed schema requirements.
 
 ---
 

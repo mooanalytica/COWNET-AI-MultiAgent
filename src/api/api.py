@@ -7,10 +7,13 @@ including chat functionality with PostgreSQL checkpointing and session managemen
 
 import os
 import sys
+import uuid
+import tempfile
+import shutil
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -25,8 +28,27 @@ from core.workflow import (
     close_connection_pool,
 )
 from logger import get_logger
+from api.file_validation import (
+    FileType,
+    ValidationResult,
+    validate_file,
+    move_validated_file,
+    cleanup_temp_file,
+)
 
 logger = get_logger(__name__)
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+# Directory paths for file uploads
+TEMP_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'temp_uploads')
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+
+# Ensure directories exist
+os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 
 # ============================================================================
@@ -71,6 +93,24 @@ class HealthResponse(BaseModel):
     """Response model for health check."""
     status: str
     version: str
+
+
+class FileUploadResponse(BaseModel):
+    """Response model for file upload endpoint."""
+    success: bool = Field(..., description="Whether the upload and validation succeeded")
+    file_id: str = Field(..., description="Unique identifier for the uploaded file")
+    file_type: str = Field(..., description="Type of file uploaded")
+    original_filename: str = Field(..., description="Original name of uploaded file")
+    is_valid: bool = Field(..., description="Whether the file passed validation")
+    errors: List[str] = Field(default_factory=list, description="Validation errors if any")
+    warnings: List[str] = Field(default_factory=list, description="Validation warnings if any")
+    destination_path: Optional[str] = Field(None, description="Final destination path if validated")
+
+
+class FileValidationRequest(BaseModel):
+    """Request model for validating an already uploaded file."""
+    file_id: str = Field(..., description="File ID from the upload response")
+    file_type: str = Field(..., description="Type of file: cow_location, cow_registry, or pen_assignment")
 
 
 # ============================================================================
@@ -124,6 +164,186 @@ async def health_check():
         status="healthy",
         version="1.0.0"
     )
+
+
+# ============================================================================
+# File Upload Endpoints
+# ============================================================================
+
+@app.post("/upload", response_model=FileUploadResponse, tags=["File Upload"])
+async def upload_file(
+    file: UploadFile = File(..., description="CSV file to upload"),
+    file_type: str = Form(..., description="Type of file: cow_location, cow_registry, or pen_assignment")
+):
+    """
+    Upload and validate a CSV file.
+    
+    This endpoint accepts CSV files, stores them in temporary storage,
+    validates their schema, and if valid, moves them to the data directory.
+    
+    Supported file types:
+    - **cow_location**: Required columns: cow_id, timestamp, x_coor, y_coor, z_coor
+    - **cow_registry**: Required columns: cow_id, parity, lactation_stage, week_id
+    - **pen_assignment**: Required columns: cow_id, pen_id, week_id
+    
+    Returns validation results and destination path if successful.
+    """
+    # Validate file_type parameter
+    try:
+        validated_file_type = FileType(file_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file_type. Must be one of: {', '.join([ft.value for ft in FileType])}"
+        )
+    
+    # Check file extension
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV files are allowed"
+        )
+    
+    # Generate unique file ID
+    file_id = str(uuid.uuid4())
+    
+    # Save to temporary storage
+    temp_file_path = os.path.join(TEMP_UPLOAD_DIR, f"{file_id}_{file.filename}")
+    
+    try:
+        # Save uploaded file to temp directory
+        with open(temp_file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        logger.info(f"File uploaded to temp storage: {temp_file_path}")
+        
+        # Validate the file
+        validation_result = validate_file(temp_file_path, validated_file_type)
+        
+        if validation_result.is_valid:
+            # Move to data directory
+            success, dest_path, error = move_validated_file(
+                temp_file_path,
+                DATA_DIR,
+                validated_file_type
+            )
+            
+            if success:
+                logger.info(f"Validated file moved to: {dest_path}")
+                return FileUploadResponse(
+                    success=True,
+                    file_id=file_id,
+                    file_type=file_type,
+                    original_filename=file.filename,
+                    is_valid=True,
+                    errors=[],
+                    warnings=validation_result.warnings,
+                    destination_path=dest_path
+                )
+            else:
+                # Cleanup temp file if move failed
+                cleanup_temp_file(temp_file_path)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to move validated file: {error}"
+                )
+        else:
+            # Cleanup invalid file from temp storage
+            cleanup_temp_file(temp_file_path)
+            
+            return FileUploadResponse(
+                success=False,
+                file_id=file_id,
+                file_type=file_type,
+                original_filename=file.filename,
+                is_valid=False,
+                errors=validation_result.errors,
+                warnings=validation_result.warnings,
+                destination_path=None
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Cleanup on error
+        cleanup_temp_file(temp_file_path)
+        logger.error(f"File upload error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process uploaded file: {str(e)}"
+        )
+
+
+@app.get("/upload/types", tags=["File Upload"])
+async def get_file_types():
+    """
+    Get list of supported file types and their required schemas.
+    
+    Returns information about each file type including required columns
+    and their expected data types.
+    """
+    return {
+        "file_types": [
+            {
+                "type": "cow_location",
+                "description": "Cow location tracking data",
+                "required_columns": {
+                    "cow_id": "uuid or int - Unique identifier for the cow",
+                    "timestamp": "UNIX timestamp - Time of the location reading",
+                    "x_coor": "float - X coordinate",
+                    "y_coor": "float - Y coordinate",
+                    "z_coor": "float - Z coordinate"
+                }
+            },
+            {
+                "type": "cow_registry",
+                "description": "Cow registry and metadata",
+                "required_columns": {
+                    "cow_id": "uuid or int - Unique identifier for the cow",
+                    "parity": "int - Number of times the cow has given birth",
+                    "lactation_stage": "string - Current lactation stage",
+                    "week_id": "ISO-8601 week format (YYYY-Www) - Week identifier"
+                }
+            },
+            {
+                "type": "pen_assignment",
+                "description": "Cow pen assignment data",
+                "required_columns": {
+                    "cow_id": "uuid or int - Unique identifier for the cow",
+                    "pen_id": "int - Identifier for the pen",
+                    "week_id": "ISO-8601 week format (YYYY-Www) - Week identifier"
+                }
+            }
+        ]
+    }
+
+
+@app.delete("/upload/temp/{file_id}", tags=["File Upload"])
+async def delete_temp_file(file_id: str):
+    """
+    Delete a file from temporary storage.
+    
+    Use this to clean up files that were uploaded but not validated.
+    
+    - **file_id**: The file ID returned from the upload endpoint
+    """
+    # Find files with matching ID prefix
+    deleted = False
+    for filename in os.listdir(TEMP_UPLOAD_DIR):
+        if filename.startswith(file_id):
+            file_path = os.path.join(TEMP_UPLOAD_DIR, filename)
+            if cleanup_temp_file(file_path):
+                deleted = True
+                logger.info(f"Deleted temp file: {file_path}")
+    
+    if deleted:
+        return {"message": f"Temporary file(s) with ID {file_id} deleted successfully"}
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No temporary file found with ID: {file_id}"
+        )
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])

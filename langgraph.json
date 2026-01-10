@@ -5,7 +5,7 @@
     },
     "env": ".env",
     "python_version": "3.11",
-    "dependencies": ["."],
+    "dependencies": ["-r", "requirements.txt"],
     "store": {
         "index": {
             "dims": 1536,

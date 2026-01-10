@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Temporary upload storage
+temp_uploads/
+src/temp_uploads/
+
 # Distribution / packaging
 .Python
 build/
